@@ -1,0 +1,196 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Weather Pro One</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600&display=swap');
+        body { font-family: 'Inter', sans-serif; transition: background 1s ease; min-height: 100vh; display: flex; align-items: center; justify-content: center; overflow-x: hidden; margin: 0; }
+        .glass { background: rgba(255, 255, 255, 0.12); backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px); border: 1px solid rgba(255, 255, 255, 0.2); box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.2); }
+        .day-bg { background: linear-gradient(135deg, #74ebd5 0%, #acb6e5 100%); color: #1a202c; }
+        .night-bg { background: linear-gradient(135deg, #0f2027 0%, #203a43 50%, #2c5364 100%); color: #f7fafc; }
+        #map { height: 160px; width: 100%; border-radius: 1.25rem; z-index: 50 !important; }
+        .no-scrollbar::-webkit-scrollbar { display: none; }
+        .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+        .hourly-container { display: flex; gap: 12px; overflow-x: auto; padding-bottom: 8px; }
+        #search-overlay { position: fixed; top: 0; left: 0; width: 100%; height: 100%; z-index: 100; display: none; flex-direction: column; padding: 1.5rem; background: inherit; }
+        #search-overlay.active { display: flex; }
+        .weather-content { max-height: 90vh; overflow-y: auto; }
+    </style>
+</head>
+<body class="day-bg p-4">
+
+    <div id="search-overlay">
+        <div class="w-full max-w-md mx-auto">
+            <div class="flex items-center space-x-4 mb-6">
+                <button onclick="closeSearch()" class="p-2 hover:bg-white/10 rounded-full transition-colors">
+                    <i data-lucide="arrow-left" class="w-6 h-6"></i>
+                </button>
+                <div class="flex-grow flex items-center bg-white/20 rounded-full px-5 py-3 border border-white/20">
+                    <input type="text" id="search-input-full" placeholder="Search city..." class="bg-transparent border-none outline-none text-lg w-full placeholder:text-current/50">
+                </div>
+            </div>
+            <div id="search-suggestions-full" class="space-y-2 mt-4"></div>
+        </div>
+    </div>
+
+    <div id="app-container" class="w-full max-w-md">
+        <div id="weather-card" class="glass rounded-[2.5rem] p-6 hidden weather-content no-scrollbar relative">
+            <div class="flex justify-between items-center mb-6">
+                <div class="text-left">
+                    <h1 id="city" class="text-2xl font-semibold truncate max-w-[200px]">--</h1>
+                    <p id="date" class="text-xs opacity-60"></p>
+                </div>
+                <div class="flex space-x-2">
+                    <button id="notif-btn" onclick="initNotifications()" class="p-3 bg-white/10 rounded-full hover:bg-white/20 transition-all">
+                        <i data-lucide="bell" class="w-5 h-5"></i>
+                    </button>
+                    <button onclick="openSearch()" class="p-3 bg-white/10 rounded-full hover:bg-white/20 transition-all">
+                        <i data-lucide="search" class="w-5 h-5"></i>
+                    </button>
+                </div>
+            </div>
+            
+            <div class="text-center mb-8">
+                <div id="weather-icon-main" class="flex justify-center mb-2"></div>
+                <h2 id="temp" class="text-8xl font-light tracking-tighter leading-none">--°</h2>
+                <p id="description" class="text-xl mt-2 capitalize font-medium opacity-80">--</p>
+            </div>
+
+            <div class="grid grid-cols-2 gap-4 p-4 bg-white/5 rounded-3xl mb-6">
+                <div class="flex items-center justify-center space-x-3"><i data-lucide="droplets" class="w-5 h-5 opacity-60"></i><span id="humidity">--%</span></div>
+                <div class="flex items-center justify-center space-x-3 border-l border-white/10"><i data-lucide="wind" class="w-5 h-5 opacity-60"></i><span id="wind">-- km/h</span></div>
+            </div>
+
+            <div class="mb-8">
+                <h3 class="text-[11px] font-bold uppercase tracking-widest opacity-50 mb-4 ml-1">Hourly</h3>
+                <div id="hourly-list" class="hourly-container no-scrollbar"></div>
+            </div>
+
+            <div class="mb-8">
+                <h3 class="text-[11px] font-bold uppercase tracking-widest opacity-50 mb-4 ml-1">7-Day Forecast</h3>
+                <div id="daily-list" class="space-y-3"></div>
+            </div>
+
+            <div class="mb-4"><div id="map"></div></div>
+            <button onclick="getLocation()" class="w-full py-4 rounded-3xl bg-white/10 text-xs font-bold uppercase tracking-widest">My Location</button>
+        </div>
+
+        <div id="loader" class="text-center py-20">
+            <div class="w-12 h-12 border-4 border-white/30 border-t-white rounded-full animate-spin mx-auto mb-4"></div>
+            <p class="text-sm opacity-60">Fetching weather data...</p>
+        </div>
+    </div>
+
+    <script>
+        // --- INLINE SERVICE WORKER GENERATOR ---
+        const swCode = `
+            self.addEventListener('install', e => self.skipWaiting());
+            self.addEventListener('activate', e => e.waitUntil(clients.claim()));
+            self.addEventListener('notificationclick', e => {
+                e.notification.close();
+                e.waitUntil(clients.openWindow('/'));
+            });
+        `;
+        const swBlob = new Blob([swCode], { type: 'application/javascript' });
+        const swUrl = URL.createObjectURL(swBlob);
+
+        if ('serviceWorker' in navigator) {
+            navigator.serviceWorker.register(swUrl).then(() => console.log("Service Worker Active"));
+        }
+
+        // Notification Logic
+        async function initNotifications() {
+            const permission = await Notification.requestPermission();
+            if (permission === "granted") {
+                const temp = document.getElementById('temp').innerText;
+                const city = document.getElementById('city').innerText;
+                const desc = document.getElementById('description').innerText;
+
+                if ('serviceWorker' in navigator) {
+                    const reg = await navigator.serviceWorker.ready;
+                    reg.showNotification(`Weather Update: ${city}`, {
+                        body: `Current temperature is ${temp} with ${desc}.`,
+                        vibrate: [200, 100, 200],
+                        badge: 'https://cdn-icons-png.flaticon.com/512/869/869869.png'
+                    });
+                }
+                document.getElementById('notif-btn').classList.add('bg-green-500/20', 'text-green-400');
+            } else {
+                alert("Please enable notifications in your browser settings to use this feature.");
+            }
+        }
+
+        // --- CORE WEATHER LOGIC ---
+        let map, marker;
+        const weatherMap = { 0: { desc: "Clear", icon: "sun" }, 1: { desc: "Mainly Clear", icon: "cloud-sun" }, 2: { desc: "Partly Cloudy", icon: "cloud-sun" }, 3: { desc: "Overcast", icon: "cloud" }, 45: { desc: "Foggy", icon: "cloud-fog" }, 61: { desc: "Rainy", icon: "cloud-rain" }, 95: { desc: "Stormy", icon: "cloud-lightning" } };
+
+        async function fetchWeather(lat, lon) {
+            try {
+                const geo = await fetch(`https://nominatim.openstreetmap.org/reverse?lat=${lat}&lon=${lon}&format=json`).then(r => r.json());
+                document.getElementById('city').innerText = geo.address.city || geo.address.town || geo.address.country || "Location";
+                const res = await fetch(`https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&current=temperature_2m,relative_humidity_2m,is_day,weather_code,wind_speed_10m&hourly=temperature_2m,weather_code&daily=weather_code,temperature_2m_max,temperature_2m_min&timezone=auto`).then(r => r.json());
+                render(res, lat, lon);
+            } catch (e) { console.error(e); }
+        }
+
+        function render(data, lat, lon) {
+            const cur = data.current;
+            const w = weatherMap[cur.weather_code] || { desc: "Cloudy", icon: "cloud" };
+            document.getElementById('temp').innerText = `${Math.round(cur.temperature_2m)}°`;
+            document.getElementById('description').innerText = w.desc;
+            document.getElementById('humidity').innerText = `${cur.relative_humidity_2m}%`;
+            document.getElementById('wind').innerText = `${Math.round(cur.wind_speed_10m)} km/h`;
+            document.getElementById('date').innerText = new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' });
+            document.getElementById('weather-icon-main').innerHTML = `<i data-lucide="${w.icon}" class="w-16 h-16"></i>`;
+            document.body.className = cur.is_day === 0 ? 'night-bg p-4' : 'day-bg p-4';
+            
+            document.getElementById('hourly-list').innerHTML = data.hourly.time.slice(0, 24).map((t, i) => `
+                <div class="flex flex-col items-center min-w-[65px] bg-white/10 rounded-2xl p-4">
+                    <span class="text-[10px] opacity-60 mb-2">${new Date(t).getHours()}:00</span>
+                    <i data-lucide="${(weatherMap[data.hourly.weather_code[i]] || {icon:'cloud'}).icon}" class="w-5 h-5 mb-2"></i>
+                    <span class="text-sm font-semibold">${Math.round(data.hourly.temperature_2m[i])}°</span>
+                </div>`).join('');
+
+            document.getElementById('daily-list').innerHTML = data.daily.time.map((d, i) => `
+                <div class="flex items-center justify-between p-4 bg-white/5 rounded-2xl">
+                    <span class="w-10 text-sm font-semibold">${new Date(d).toLocaleDateString('en-US', { weekday: 'short' })}</span>
+                    <i data-lucide="${(weatherMap[data.daily.weather_code[i]] || {icon:'cloud'}).icon}" class="w-4 h-4 opacity-70"></i>
+                    <span class="text-sm font-semibold">${Math.round(data.daily.temperature_2m_max[i])}°</span>
+                </div>`).join('');
+
+            lucide.createIcons();
+            document.getElementById('loader').classList.add('hidden');
+            document.getElementById('weather-card').classList.remove('hidden');
+            
+            if (!map) {
+                map = L.map('map', { zoomControl: false, attributionControl: false, tap: false }).setView([lat, lon], 10);
+                L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png').addTo(map);
+                marker = L.marker([lat, lon]).addTo(map);
+                map.on('click', e => { marker.setLatLng(e.latlng); fetchWeather(e.latlng.lat, e.latlng.lng); });
+            } else { map.setView([lat, lon], 10); marker.setLatLng([lat, lon]); }
+            setTimeout(() => map.invalidateSize(), 200);
+        }
+
+        function getLocation() { navigator.geolocation.getCurrentPosition(p => fetchWeather(p.coords.latitude, p.coords.longitude), () => fetchWeather(34, -6)); }
+        function openSearch() { document.getElementById('search-overlay').classList.add('active'); document.getElementById('search-input-full').focus(); }
+        function closeSearch() { document.getElementById('search-overlay').classList.remove('active'); }
+
+        document.getElementById('search-input-full').addEventListener('input', async e => {
+            const query = e.target.value.trim();
+            if (query.length < 3) return;
+            const res = await fetch(`https://nominatim.openstreetmap.org/search?q=${query}&format=json&limit=5`).then(r => r.json());
+            document.getElementById('search-suggestions-full').innerHTML = res.map(item => `
+                <div onclick="closeSearch(); fetchWeather(${item.lat}, ${item.lon})" class="p-4 bg-white/10 rounded-2xl cursor-pointer mb-2 transition-all hover:bg-white/20">${item.display_name}</div>
+            `).join('');
+        });
+
+        window.onload = getLocation;
+    </script>
+</body>
+</html>
